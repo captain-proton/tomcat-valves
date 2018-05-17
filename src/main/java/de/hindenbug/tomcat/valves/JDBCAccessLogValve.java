@@ -10,6 +10,8 @@ import org.apache.tomcat.util.ExceptionUtils;
 
 import javax.servlet.ServletException;
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.sql.*;
 import java.util.Properties;
 
@@ -82,6 +84,10 @@ import java.util.Properties;
  * </p>
  */
 public class JDBCAccessLogValve extends ValveBase implements AccessLog {
+
+    private static final String HIDE_VALUE = "1";
+    private static final String DELIMITER_4 = ".";
+    private static final String DELIMITER_6 = ":";
 
     // ----------------------------------------------------------- Constructors
 
@@ -460,6 +466,7 @@ public class JDBCAccessLogValve extends ValveBase implements AccessLog {
                 remoteHost = request.getRemoteAddr();
             }
         }
+        remoteHost = hideRemoteHost(remoteHost);
         String user = request.getRemoteUser();
         String requestURI = request.getRequestURI();
         String query = request.getQueryString();
@@ -524,8 +531,57 @@ public class JDBCAccessLogValve extends ValveBase implements AccessLog {
 
     }
 
+    private String hideRemoteHost(String host) {
+        try {
+            InetAddress address = InetAddress.getByName(host);
+            byte[] rawAddress = address.getAddress();
+            switch (rawAddress.length) {
+                case 4:
+                    return hide4RemoteHost(rawAddress);
+                case 16:
+                    return hide6RemoteHost(rawAddress);
+            }
+		} catch (UnknownHostException e) {
+            container.getLogger().error(sm.getString("jdbcAccessLogValve.exception"), e);
+		}
+        return host;
+    }
 
-    /**
+    private String hide6RemoteHost(byte[] rawAddress) {
+
+        if (rawAddress.length > 16)
+            throw new IllegalArgumentException("invalid ip v6 address");
+
+        String[] ip = new String[8];
+        for (int i = 0; i < rawAddress.length; i += 2) {
+            int firstOctet = getOctet(rawAddress[i]) << 8;
+            int secondOctet = getOctet(rawAddress[i + 1]);
+            ip[i / 2] = i < rawAddress.length - 2
+                ? Integer.toHexString(firstOctet + secondOctet)
+                : HIDE_VALUE;
+        }
+		return String.join(DELIMITER_6, ip);
+	}
+
+	private String hide4RemoteHost(byte[] rawAddress) {
+        if (rawAddress.length > 4)
+            throw new IllegalArgumentException("invalid ip v4 address");
+
+        String[] result = new String[4];
+        for (int i = 0; i < rawAddress.length; i++) {
+            int octet = getOctet(rawAddress[i]);
+            result[i] = i < rawAddress.length - 1 
+                    ? Integer.toString(octet)
+                    : HIDE_VALUE;
+        }
+		return String.join(DELIMITER_4, result);
+	}
+
+    private static int getOctet(byte b) {
+        return b < 0 ? b + 256 : b;
+    }
+
+	/**
      * Open (if necessary) and return a database connection for use by
      * this AccessLogValve.
      *
